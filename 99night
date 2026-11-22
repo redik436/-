@@ -1,4 +1,7 @@
-    local viewport = canvas.AbsoluteSize
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+
+local viewport = canvas.AbsoluteSize
     if viewport.X <= 0 or viewport.Y <= 0 then
         return
     end

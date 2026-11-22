@@ -1,149 +1,110 @@
-local Players = game:GetService("Players")
-local UserInputService = game:GetService("UserInputService")
-
-local viewport = canvas.AbsoluteSize
-    if viewport.X <= 0 or viewport.Y <= 0 then
-        return
-    end
-    local margin = math.min(12, viewport.X / 4, viewport.Y / 4)
-    local maxX = math.max(margin, viewport.X - window.Size.X.Offset - margin)
-    local maxY = math.max(margin, viewport.Y - window.Size.Y.Offset - margin)
-    window.Position = UDim2.fromOffset(
-        math.clamp(position.X, margin, maxX),
-        math.clamp(position.Y, margin, maxY)
-    )
+		return nil, nil
+	end
+	return character, root
 end
 
-local function resizeMenu()
-    if not gui.Parent then
-        return
-    end
-    local viewport = canvas.AbsoluteSize
-    if viewport.X <= 0 or viewport.Y <= 0 then
-        return
-    end
-    draggingInput = nil
-    local margin = math.min(12, viewport.X / 4, viewport.Y / 4)
-    local width = math.min(MENU_WIDTH, viewport.X - margin * 2)
-    local expandedHeight = math.min(MENU_HEIGHT, viewport.Y - margin * 2)
-    local height = collapsed and math.min(HEADER_HEIGHT, expandedHeight) or expandedHeight
-    window.Size = UDim2.fromOffset(width, height)
+connect(saveButton.Activated, function()
+	local character = getCharacter()
+	if not character then
+		return
+	end
+	savedPivot = character:GetPivot()
+	local position = savedPivot.Position
+	pointLabel.Text = string.format("X: %.0f   Y: %.0f   Z: %.0f", position.X, position.Y, position.Z)
+	setStatus("Точка сохранена на время работы меню.")
+end)
 
-    local bodyWidth = math.max(0, width - 32)
-    local bodyHeight = math.max(0, expandedHeight - 98)
-    local sidebarWidth = math.clamp(math.floor(bodyWidth * 0.3), 118, 184)
-    sidebarWidth = math.min(sidebarWidth, math.max(0, bodyWidth - 88))
-    local contentLeft = math.min(bodyWidth, sidebarWidth + 14)
-    body.Size = UDim2.fromOffset(bodyWidth, bodyHeight)
-    body.Visible = not collapsed and bodyHeight >= 60
-    sidebar.Size = UDim2.fromOffset(sidebarWidth, bodyHeight)
-    content.Position = UDim2.fromOffset(contentLeft, 0)
-    content.Size = UDim2.fromOffset(math.max(0, bodyWidth - contentLeft), bodyHeight)
+connect(teleportButton.Activated, function()
+	if not savedPivot then
+		setStatus("Сначала сохрани текущую позицию.", true)
+		return
+	end
+	local character, root = getCharacter()
+	if not character then
+		return
+	end
+	local ok, err = pcall(function()
+		character:PivotTo(savedPivot)
+		root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+		root.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+	end)
+	if not ok then
+		setStatus("Не удалось переместить персонажа.", true)
+		warn("99 Nights Menu TP: " .. tostring(err))
+		return
+	end
+	setStatus("Позиция изменена локально. Сервер может откатить TP.")
+end)
 
-    -- На низком экране отдаём больше высоты кнопкам и содержимому.
-    local short = bodyHeight < 160
-    local tabsTop = short and 8 or 40
-    local tabsBottom = short and 8 or 32
-    local pageTop = short and 38 or 58
-    navigationLabel.Visible = not short
-    scrollHint.Visible = not short
-    pageSubtitle.Visible = not short
-    tabList.Position = UDim2.fromOffset(8, tabsTop)
-    tabList.Size = UDim2.fromOffset(math.max(0, sidebarWidth - 16), math.max(0, bodyHeight - tabsTop - tabsBottom))
-    pageHost.Position = UDim2.fromOffset(0, pageTop)
-    pageHost.Size = UDim2.new(1, 0, 0, math.max(0, bodyHeight - pageTop))
-
-    -- На узком экране убираем номера, оставляя место названиям кнопок.
-    local compact = width < 520
-    for _, tab in ipairs(tabs) do
-        tab.badge.Visible = not compact
-        tab.title.Position = UDim2.fromOffset(compact and 12 or 48, 0)
-        tab.title.Size = UDim2.new(1, compact and -22 or -58, 1, 0)
-        tab.title.TextSize = compact and 12 or 13
-    end
-    pageTitle.TextSize = compact and 20 or 22
-    logo.Visible = width >= 380
-    local titleLeft = logo.Visible and 72 or 18
-    titleLabel.Position = UDim2.fromOffset(titleLeft, 14)
-    subtitleLabel.Position = UDim2.fromOffset(titleLeft, 38)
-    titleLabel.Size = UDim2.fromOffset(math.max(0, width - titleLeft - 112), 23)
-    subtitleLabel.Size = UDim2.fromOffset(math.max(0, width - titleLeft - 112), 16)
-    launcher.Position = UDim2.new(0, margin, 1, -margin)
-    launcher.Size = UDim2.fromOffset(math.min(156, viewport.X - margin * 2), math.min(42, viewport.Y - margin * 2))
-
-    if not positioned then
-        positioned = true
-        moveWindow(Vector2.new((viewport.X - width) / 2, (viewport.Y - height) / 2))
-    else
-        moveWindow(Vector2.new(window.Position.X.Offset, window.Position.Y.Offset))
-    end
-    updateScrollHint()
+local function selectTab(tab)
+	local creditsSelected = tab == "Credits"
+	creditsPage.Visible = creditsSelected
+	tpPage.Visible = not creditsSelected
+	creditsTab.BackgroundColor3 = creditsSelected and colors.accent or colors.button
+	creditsTab.TextColor3 = creditsSelected and colors.background or colors.text
+	tpTab.BackgroundColor3 = creditsSelected and colors.button or colors.accent
+	tpTab.TextColor3 = creditsSelected and colors.text or colors.background
+	setStatus(creditsSelected and "M — скрыть/показать меню." or "TP локальный: сервер может вернуть персонажа назад.")
 end
 
-local function setOpen(open)
-    draggingInput = nil
-    window.Visible = open
-    launcher.Visible = not open
+connect(creditsTab.Activated, function()
+	selectTab("Credits")
+end)
+connect(tpTab.Activated, function()
+	selectTab("TP")
+end)
+
+local dragPointer
+local dragStart
+local windowStart
+
+local function setVisible(visible)
+	window.Visible = visible
+	openButton.Visible = not visible
+	dragPointer = nil
 end
 
-connect(themeButton.Activated, function()
-    themeIndex = themeIndex % #themes + 1
-    updateTheme()
+connect(hideButton.Activated, function()
+	setVisible(false)
 end)
-connect(minimizeButton.Activated, function()
-    collapsed = not collapsed
-    minimizeButton.Text = collapsed and "+" or "−"
-    resizeMenu()
-end)
-connect(closeButton.Activated, function()
-    setOpen(false)
-end)
-connect(launcher.Activated, function()
-    setOpen(true)
+connect(openButton.Activated, function()
+	setVisible(true)
 end)
 connect(UserInputService.InputBegan, function(input, processed)
-    if not processed and input.KeyCode == Enum.KeyCode.RightShift and not UserInputService:GetFocusedTextBox() then
-        setOpen(not window.Visible)
-    end
+	if not processed and not UserInputService:GetFocusedTextBox() and input.KeyCode == Enum.KeyCode.M then
+		setVisible(not window.Visible)
+	end
 end)
-connect(dragHandle.InputBegan, function(input)
-    if not draggingInput and window.Visible and
-        (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) then
-        draggingInput = input
-        dragStart = Vector2.new(input.Position.X, input.Position.Y)
-        windowStart = Vector2.new(window.Position.X.Offset, window.Position.Y.Offset)
-    end
-end)
-connect(UserInputService.InputChanged, function(input)
-    if not draggingInput or not window.Visible then
-        return
-    end
-    if draggingInput.UserInputType == Enum.UserInputType.MouseButton1 then
-        if input.UserInputType ~= Enum.UserInputType.MouseMovement then
-            return
-        end
-    elseif input ~= draggingInput then
-        return
-    end
-    local position = Vector2.new(input.Position.X, input.Position.Y)
-    moveWindow(windowStart + position - dragStart)
-end)
-connect(UserInputService.InputEnded, function(input)
-    if not draggingInput then
-        return
-    end
-    if input == draggingInput or
-        (input.UserInputType == Enum.UserInputType.MouseButton1 and draggingInput.UserInputType == Enum.UserInputType.MouseButton1) then
-        draggingInput = nil
-    end
-end)
-connect(UserInputService.WindowFocusReleased, function()
-    draggingInput = nil
-end)
-connect(canvas:GetPropertyChangedSignal("AbsoluteSize"), resizeMenu)
-connect(tabList:GetPropertyChangedSignal("AbsoluteCanvasSize"), updateScrollHint)
-connect(tabList:GetPropertyChangedSignal("AbsoluteWindowSize"), updateScrollHint)
-connect(tabList:GetPropertyChangedSignal("CanvasPosition"), updateScrollHint)
 
-updateTheme(true)
-resizeMenu()
+connect(header.InputBegan, function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		dragPointer = input
+		dragStart = input.Position
+		windowStart = window.AbsolutePosition
+	end
+end)
+
+connect(UserInputService.InputChanged, function(input)
+	if not dragPointer or not window.Visible then
+		return
+	end
+	local mouseMoving = dragPointer.UserInputType == Enum.UserInputType.MouseButton1
+		and input.UserInputType == Enum.UserInputType.MouseMovement
+	if not mouseMoving and input ~= dragPointer then
+		return
+	end
+	local delta = input.Position - dragStart
+	local viewport = viewportSize()
+	local size = window.AbsoluteSize
+	local x = math.clamp(windowStart.X + delta.X, 0, math.max(0, viewport.X - size.X))
+	local y = math.clamp(windowStart.Y + delta.Y, 0, math.max(0, viewport.Y - size.Y))
+	window.Position = UDim2.fromOffset(x, y)
+end)
+
+connect(UserInputService.InputEnded, function(input)
+	if input == dragPointer then
+		dragPointer = nil
+	end
+end)
+
+selectTab("Credits")

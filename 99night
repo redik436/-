@@ -1,110 +1,601 @@
-		return nil, nil
-	end
-	return character, root
+-- RB Menu. Запускай на клиенте как LocalScript.
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+if not player then
+    warn("[RB Menu] Нужен клиентский LocalScript.")
+    return
 end
 
-connect(saveButton.Activated, function()
-	local character = getCharacter()
-	if not character then
-		return
-	end
-	savedPivot = character:GetPivot()
-	local position = savedPivot.Position
-	pointLabel.Text = string.format("X: %.0f   Y: %.0f   Z: %.0f", position.X, position.Y, position.Z)
-	setStatus("Точка сохранена на время работы меню.")
-end)
+local playerGui = player:WaitForChild("PlayerGui")
+local guiName = "RBMenuShell"
 
-connect(teleportButton.Activated, function()
-	if not savedPivot then
-		setStatus("Сначала сохрани текущую позицию.", true)
-		return
-	end
-	local character, root = getCharacter()
-	if not character then
-		return
-	end
-	local ok, err = pcall(function()
-		character:PivotTo(savedPivot)
-		root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-		root.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
-	end)
-	if not ok then
-		setStatus("Не удалось переместить персонажа.", true)
-		warn("99 Nights Menu TP: " .. tostring(err))
-		return
-	end
-	setStatus("Позиция изменена локально. Сервер может откатить TP.")
-end)
-
-local function selectTab(tab)
-	local creditsSelected = tab == "Credits"
-	creditsPage.Visible = creditsSelected
-	tpPage.Visible = not creditsSelected
-	creditsTab.BackgroundColor3 = creditsSelected and colors.accent or colors.button
-	creditsTab.TextColor3 = creditsSelected and colors.background or colors.text
-	tpTab.BackgroundColor3 = creditsSelected and colors.button or colors.accent
-	tpTab.TextColor3 = creditsSelected and colors.text or colors.background
-	setStatus(creditsSelected and "M — скрыть/показать меню." or "TP локальный: сервер может вернуть персонажа назад.")
+for _, child in ipairs(playerGui:GetChildren()) do
+    if child.Name == guiName and child:GetAttribute("RBMenuOwned") == true then
+        child:Destroy()
+    end
 end
 
-connect(creditsTab.Activated, function()
-	selectTab("Credits")
-end)
-connect(tpTab.Activated, function()
-	selectTab("TP")
-end)
+local colors = {
+    background = Color3.fromRGB(17, 20, 30),
+    sidebar = Color3.fromRGB(22, 26, 38),
+    card = Color3.fromRGB(28, 33, 47),
+    button = Color3.fromRGB(36, 43, 59),
+    outline = Color3.fromRGB(65, 77, 99),
+    text = Color3.fromRGB(240, 244, 255),
+    muted = Color3.fromRGB(153, 166, 192),
+}
 
-local dragPointer
-local dragStart
-local windowStart
+local themes = {
+    { name = "Синий", color = Color3.fromRGB(110, 169, 255) },
+    { name = "Фиолетовый", color = Color3.fromRGB(180, 148, 255) },
+    { name = "Зелёный", color = Color3.fromRGB(103, 217, 170) },
+}
 
-local function setVisible(visible)
-	window.Visible = visible
-	openButton.Visible = not visible
-	dragPointer = nil
+local connections, tabs, pages = {}, {}, {}
+local themeIndex, activeTab = 1, "Главная"
+local collapsed, positioned = false, false
+local dragInput, dragStart, windowStart
+
+local function connect(signal, callback)
+    local connection = signal:Connect(callback)
+    table.insert(connections, connection)
+    return connection
 end
 
-connect(hideButton.Activated, function()
-	setVisible(false)
+local function create(className, properties, parent)
+    local object = Instance.new(className)
+    for property, value in pairs(properties) do
+        object[property] = value
+    end
+    object.Parent = parent
+    return object
+end
+
+local function round(object, radius)
+    create("UICorner", {
+        CornerRadius = UDim.new(0, radius),
+    }, object)
+end
+
+local function stroke(object, color, transparency)
+    return create("UIStroke", {
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+        Color = color,
+        Thickness = 1,
+        Transparency = transparency or 0.6,
+    }, object)
+end
+
+local function label(parent, text, size, color)
+    return create("TextLabel", {
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 0, 22),
+        Font = Enum.Font.Gotham,
+        Text = text,
+        TextSize = size or 13,
+        TextColor3 = color or colors.text,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+    }, parent)
+end
+
+local function button(parent, text)
+    local object = create("TextButton", {
+        BackgroundColor3 = colors.button,
+        BorderSizePixel = 0,
+        Size = UDim2.fromOffset(32, 32),
+        Font = Enum.Font.GothamMedium,
+        Text = text,
+        TextSize = 14,
+        TextColor3 = colors.text,
+        AutoButtonColor = true,
+    }, parent)
+    round(object, 9)
+    return object
+end
+
+local function clamp(value, minimum, maximum)
+    return math.max(minimum, math.min(maximum, value))
+end
+
+local gui = create("ScreenGui", {
+    Name = guiName,
+    ResetOnSpawn = false,
+    IgnoreGuiInset = false,
+    DisplayOrder = 100,
+    ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+}, playerGui)
+gui:SetAttribute("RBMenuOwned", true)
+
+gui.Destroying:Connect(function()
+    dragInput = nil
+    for _, connection in ipairs(connections) do
+        connection:Disconnect()
+    end
+    connections = {}
 end)
-connect(openButton.Activated, function()
-	setVisible(true)
+
+local canvas = create("Frame", {
+    Name = "Canvas",
+    BackgroundTransparency = 1,
+    BorderSizePixel = 0,
+    Size = UDim2.fromScale(1, 1),
+}, gui)
+
+local window = create("Frame", {
+    Name = "Window",
+    BackgroundColor3 = colors.background,
+    BorderSizePixel = 0,
+    Position = UDim2.new(0.5, -330, 0.5, -215),
+    Size = UDim2.fromOffset(660, 430),
+    ClipsDescendants = true,
+    Active = true,
+}, canvas)
+round(window, 15)
+
+local border = stroke(window, themes[1].color, 0.45)
+
+local header = create("Frame", {
+    Name = "Header",
+    BackgroundTransparency = 1,
+    Size = UDim2.new(1, 0, 0, 60),
+}, window)
+
+local logo = label(header, "RB", 15, colors.background)
+logo.Position = UDim2.fromOffset(14, 14)
+logo.Size = UDim2.fromOffset(32, 32)
+logo.BackgroundTransparency = 0
+logo.Font = Enum.Font.GothamBold
+logo.TextXAlignment = Enum.TextXAlignment.Center
+round(logo, 9)
+
+local title = label(header, "RB MENU", 18)
+title.Font = Enum.Font.GothamBold
+title.Position = UDim2.fromOffset(58, 10)
+title.Size = UDim2.new(1, -158, 0, 24)
+
+local subtitle = label(header, "Панель управления", 11, colors.muted)
+subtitle.Position = UDim2.fromOffset(58, 35)
+subtitle.Size = UDim2.new(1, -158, 0, 16)
+
+local dragHandle = create("Frame", {
+    Name = "DragHandle",
+    BackgroundTransparency = 1,
+    Size = UDim2.new(1, -100, 1, 0),
+    Active = true,
+    ZIndex = 3,
+}, header)
+
+local minimize = button(header, "−")
+minimize.Name = "Minimize"
+minimize.Position = UDim2.new(1, -82, 0, 14)
+minimize.TextSize = 22
+minimize.ZIndex = 4
+
+local close = button(header, "×")
+close.Name = "Close"
+close.Position = UDim2.new(1, -42, 0, 14)
+close.TextSize = 22
+close.ZIndex = 4
+close.TextColor3 = Color3.fromRGB(255, 140, 157)
+
+create("Frame", {
+    BackgroundColor3 = colors.outline,
+    BackgroundTransparency = 0.6,
+    BorderSizePixel = 0,
+    Position = UDim2.fromOffset(14, 60),
+    Size = UDim2.new(1, -28, 0, 1),
+}, window)
+
+local body = create("Frame", {
+    Name = "Body",
+    BackgroundTransparency = 1,
+    Position = UDim2.fromOffset(14, 74),
+    Size = UDim2.new(1, -28, 1, -88),
+}, window)
+
+local sidebar = create("Frame", {
+    Name = "Sidebar",
+    BackgroundColor3 = colors.sidebar,
+    BorderSizePixel = 0,
+    Size = UDim2.new(0, 170, 1, 0),
+    ClipsDescendants = true,
+}, body)
+round(sidebar, 12)
+stroke(sidebar, colors.outline)
+
+local navigationTitle = label(sidebar, "РАЗДЕЛЫ", 10, colors.muted)
+navigationTitle.Font = Enum.Font.GothamBold
+navigationTitle.Position = UDim2.fromOffset(12, 12)
+navigationTitle.Size = UDim2.new(1, -24, 0, 18)
+
+-- Прокрутка автоматически увеличивается вместе со списком.
+local function scrollingFrame(parent, name)
+    local frame = create("ScrollingFrame", {
+        Name = name,
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Size = UDim2.fromScale(1, 1),
+        CanvasSize = UDim2.fromOffset(0, 0),
+        ScrollingDirection = Enum.ScrollingDirection.Y,
+        ScrollBarThickness = 3,
+        ScrollBarImageColor3 = themes[themeIndex].color,
+        Active = true,
+        ClipsDescendants = true,
+    }, parent)
+
+    create("UIPadding", {
+        PaddingTop = UDim.new(0, 2),
+        PaddingBottom = UDim.new(0, 6),
+        PaddingLeft = UDim.new(0, 2),
+        PaddingRight = UDim.new(0, 6),
+    }, frame)
+
+    local layout = create("UIListLayout", {
+        FillDirection = Enum.FillDirection.Vertical,
+        SortOrder = Enum.SortOrder.LayoutOrder,
+        Padding = UDim.new(0, 6),
+    }, frame)
+
+    local function syncCanvas()
+        frame.CanvasSize = UDim2.fromOffset(
+            0,
+            layout.AbsoluteContentSize.Y + 8
+        )
+    end
+
+    connect(layout:GetPropertyChangedSignal("AbsoluteContentSize"), syncCanvas)
+    connect(frame:GetPropertyChangedSignal("AbsoluteSize"), syncCanvas)
+    syncCanvas()
+    return frame
+end
+
+local tabList = scrollingFrame(sidebar, "TabList")
+
+local scrollHint = label(sidebar, "", 10, colors.muted)
+scrollHint.AnchorPoint = Vector2.new(0, 1)
+scrollHint.Position = UDim2.new(0, 12, 1, -10)
+scrollHint.Size = UDim2.new(1, -24, 0, 16)
+scrollHint.TextXAlignment = Enum.TextXAlignment.Center
+
+local content = create("Frame", {
+    Name = "Content",
+    BackgroundTransparency = 1,
+    Size = UDim2.fromScale(1, 1),
+}, body)
+
+local pageTitle = label(content, "Главная", 20)
+pageTitle.Font = Enum.Font.GothamBold
+pageTitle.Size = UDim2.new(1, 0, 0, 28)
+
+local pageHost = create("Frame", {
+    Name = "Pages",
+    BackgroundTransparency = 1,
+    ClipsDescendants = true,
+    Position = UDim2.fromOffset(0, 40),
+    Size = UDim2.new(1, 0, 1, -40),
+}, content)
+
+local launcher = button(canvas, "Открыть меню")
+launcher.Name = "OpenMenu"
+launcher.AnchorPoint = Vector2.new(0, 1)
+launcher.Position = UDim2.new(0, 12, 1, -12)
+launcher.Size = UDim2.fromOffset(150, 38)
+launcher.Visible = false
+
+local function selectTab(name)
+    if not pages[name] then return end
+
+    activeTab = name
+    pageTitle.Text = name
+    local accent = themes[themeIndex].color
+
+    for _, tab in ipairs(tabs) do
+        local selected = tab.name == name
+        tab.page.Visible = selected
+        tab.button.BackgroundColor3 = selected
+            and accent:Lerp(colors.sidebar, 0.8)
+            or colors.button
+        tab.title.TextColor3 = selected and colors.text or colors.muted
+        tab.indicator.BackgroundColor3 = accent
+        tab.indicator.Visible = selected
+    end
+end
+
+local function addTab(name)
+    if pages[name] then return pages[name] end
+
+    local tabButton = button(tabList, "")
+    tabButton.Name = name
+    tabButton.Size = UDim2.new(1, 0, 0, 42)
+    tabButton.LayoutOrder = #tabs + 1
+
+    local tabTitle = label(tabButton, name, 13)
+    tabTitle.Font = Enum.Font.GothamMedium
+    tabTitle.Position = UDim2.fromOffset(12, 0)
+    tabTitle.Size = UDim2.new(1, -24, 1, 0)
+
+    local indicator = create("Frame", {
+        BackgroundColor3 = themes[themeIndex].color,
+        BorderSizePixel = 0,
+        Position = UDim2.fromOffset(0, 12),
+        Size = UDim2.fromOffset(3, 18),
+        Visible = false,
+    }, tabButton)
+    round(indicator, 2)
+
+    local page = scrollingFrame(pageHost, name)
+    page.Visible = false
+    pages[name] = page
+
+    table.insert(tabs, {
+        name = name,
+        button = tabButton,
+        title = tabTitle,
+        indicator = indicator,
+        page = page,
+    })
+
+    connect(tabButton.Activated, function()
+        selectTab(name)
+    end)
+
+    return page
+end
+
+local function card(page, heading, description, order)
+    local frame = create("Frame", {
+        BackgroundColor3 = colors.card,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 0, 0),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        LayoutOrder = order,
+    }, page)
+    round(frame, 12)
+    stroke(frame, colors.outline)
+
+    create("UIPadding", {
+        PaddingTop = UDim.new(0, 12),
+        PaddingBottom = UDim.new(0, 12),
+        PaddingLeft = UDim.new(0, 12),
+        PaddingRight = UDim.new(0, 12),
+    }, frame)
+
+    create("UIListLayout", {
+        SortOrder = Enum.SortOrder.LayoutOrder,
+        Padding = UDim.new(0, 8),
+    }, frame)
+
+    for index, text in ipairs({ heading, description }) do
+        local item = label(
+            frame,
+            text,
+            index == 1 and 16 or 13,
+            index == 1 and colors.text or colors.muted
+        )
+        item.Font = index == 1 and Enum.Font.GothamBold or Enum.Font.Gotham
+        item.Size = UDim2.new(1, 0, 0, 0)
+        item.AutomaticSize = Enum.AutomaticSize.Y
+        item.LayoutOrder = index
+        item.TextWrapped = true
+        item.TextTruncate = Enum.TextTruncate.None
+        item.TextYAlignment = Enum.TextYAlignment.Top
+    end
+
+    return frame
+end
+
+local homePage = addTab("Главная")
+local settingsPage = addTab("Настройки")
+local aboutPage = addTab("О меню")
+
+card(homePage, "Добро пожаловать",
+    "Выбирай раздел слева. Когда кнопок станет много, список можно листать вниз колёсиком мыши или свайпом.", 1)
+
+card(homePage, "Управление",
+    "Перетаскивай окно за верхнюю панель.\n«−» — свернуть, «×» — скрыть.\nRight Shift — скрыть или показать меню.", 2)
+
+local appearanceCard = card(settingsPage, "Оформление",
+    "Нажимай кнопку ниже, чтобы менять цвет меню.", 1)
+
+local themeButton = button(appearanceCard, "")
+themeButton.Name = "ChangeTheme"
+themeButton.Size = UDim2.new(1, 0, 0, 38)
+themeButton.LayoutOrder = 3
+
+card(aboutPage, "RB Menu",
+    "Только интерфейс. Без внешних библиотек, загрузчиков и изменений игрового мира.", 1)
+
+-- Добавляй новые разделы здесь:
+-- local extraPage = addTab("Новый раздел")
+-- card(extraPage, "Заголовок", "Содержимое страницы.", 1)
+
+local function updateTheme()
+    local theme = themes[themeIndex]
+    border.Color = theme.color
+    logo.BackgroundColor3 = theme.color
+    launcher.BackgroundColor3 = theme.color
+    launcher.TextColor3 = colors.background
+    themeButton.Text = "Акцент: " .. theme.name
+    themeButton.TextColor3 = theme.color
+    tabList.ScrollBarImageColor3 = theme.color
+
+    for _, tab in ipairs(tabs) do
+        tab.page.ScrollBarImageColor3 = theme.color
+    end
+
+    selectTab(activeTab)
+end
+
+local function updateScrollHint()
+    local overflow = tabList.CanvasSize.Y.Offset - tabList.AbsoluteSize.Y
+    if overflow > 1 then
+        scrollHint.Text = tabList.CanvasPosition.Y >= overflow - 1
+            and "Листай вверх ↑"
+            or "Прокрутка ↓"
+    else
+        scrollHint.Text = "Разделов: " .. #tabs
+    end
+end
+
+local function moveWindow(position)
+    local viewport = canvas.AbsoluteSize
+    if viewport.X <= 0 or viewport.Y <= 0 then return end
+
+    local margin = math.min(12, viewport.X / 4, viewport.Y / 4)
+    window.Position = UDim2.fromOffset(
+        clamp(position.X, margin,
+            math.max(margin, viewport.X - window.Size.X.Offset - margin)),
+        clamp(position.Y, margin,
+            math.max(margin, viewport.Y - window.Size.Y.Offset - margin))
+    )
+end
+
+local function resizeMenu()
+    local viewport = canvas.AbsoluteSize
+    if not gui.Parent or viewport.X <= 0 or viewport.Y <= 0 then return end
+
+    dragInput = nil
+    local margin = math.min(12, viewport.X / 4, viewport.Y / 4)
+    local width = math.min(660, viewport.X - margin * 2)
+    local fullHeight = math.min(430, viewport.Y - margin * 2)
+    local height = collapsed and math.min(60, fullHeight) or fullHeight
+    window.Size = UDim2.fromOffset(width, height)
+
+    local bodyWidth = math.max(0, width - 28)
+    local bodyHeight = math.max(0, fullHeight - 88)
+    local sideWidth = math.min(
+        clamp(math.floor(bodyWidth * 0.28), 120, 170),
+        math.max(0, bodyWidth - 90)
+    )
+    local left = math.min(bodyWidth, sideWidth + 12)
+
+    body.Size = UDim2.fromOffset(bodyWidth, bodyHeight)
+    body.Visible = not collapsed and bodyHeight >= 52
+    sidebar.Size = UDim2.fromOffset(sideWidth, bodyHeight)
+    content.Position = UDim2.fromOffset(left, 0)
+    content.Size = UDim2.fromOffset(math.max(0, bodyWidth - left), bodyHeight)
+
+    local short = bodyHeight < 140
+    local top = short and 8 or 40
+    local bottom = short and 8 or 32
+    navigationTitle.Visible = not short
+    scrollHint.Visible = not short
+
+    tabList.Position = UDim2.fromOffset(8, top)
+    tabList.Size = UDim2.fromOffset(
+        math.max(0, sideWidth - 16),
+        math.max(0, bodyHeight - top - bottom)
+    )
+
+    pageHost.Size = UDim2.new(1, 0, 0, math.max(0, bodyHeight - 40))
+    title.Size = UDim2.fromOffset(math.max(0, width - 158), 24)
+    subtitle.Size = UDim2.fromOffset(math.max(0, width - 158), 16)
+    launcher.Position = UDim2.new(0, margin, 1, -margin)
+    launcher.Size = UDim2.fromOffset(
+        math.min(150, viewport.X - margin * 2),
+        math.min(38, viewport.Y - margin * 2)
+    )
+
+    if not positioned then
+        positioned = true
+        moveWindow(Vector2.new(
+            (viewport.X - width) / 2,
+            (viewport.Y - height) / 2
+        ))
+    else
+        moveWindow(Vector2.new(
+            window.Position.X.Offset,
+            window.Position.Y.Offset
+        ))
+    end
+
+    updateScrollHint()
+end
+
+local function setOpen(open)
+    dragInput = nil
+    window.Visible = open
+    launcher.Visible = not open
+end
+
+connect(themeButton.Activated, function()
+    themeIndex = themeIndex % #themes + 1
+    updateTheme()
 end)
+
+connect(minimize.Activated, function()
+    collapsed = not collapsed
+    minimize.Text = collapsed and "+" or "−"
+    resizeMenu()
+end)
+
+connect(close.Activated, function()
+    setOpen(false)
+end)
+
+connect(launcher.Activated, function()
+    setOpen(true)
+end)
+
 connect(UserInputService.InputBegan, function(input, processed)
-	if not processed and not UserInputService:GetFocusedTextBox() and input.KeyCode == Enum.KeyCode.M then
-		setVisible(not window.Visible)
-	end
+    if not processed
+        and input.KeyCode == Enum.KeyCode.RightShift
+        and not UserInputService:GetFocusedTextBox() then
+        setOpen(not window.Visible)
+    end
 end)
 
-connect(header.InputBegan, function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-		dragPointer = input
-		dragStart = input.Position
-		windowStart = window.AbsolutePosition
-	end
+connect(dragHandle.InputBegan, function(input)
+    if not dragInput and window.Visible and
+        (input.UserInputType == Enum.UserInputType.MouseButton1
+        or input.UserInputType == Enum.UserInputType.Touch) then
+        dragInput = input
+        dragStart = Vector2.new(input.Position.X, input.Position.Y)
+        windowStart = Vector2.new(
+            window.Position.X.Offset,
+            window.Position.Y.Offset
+        )
+    end
 end)
 
 connect(UserInputService.InputChanged, function(input)
-	if not dragPointer or not window.Visible then
-		return
-	end
-	local mouseMoving = dragPointer.UserInputType == Enum.UserInputType.MouseButton1
-		and input.UserInputType == Enum.UserInputType.MouseMovement
-	if not mouseMoving and input ~= dragPointer then
-		return
-	end
-	local delta = input.Position - dragStart
-	local viewport = viewportSize()
-	local size = window.AbsoluteSize
-	local x = math.clamp(windowStart.X + delta.X, 0, math.max(0, viewport.X - size.X))
-	local y = math.clamp(windowStart.Y + delta.Y, 0, math.max(0, viewport.Y - size.Y))
-	window.Position = UDim2.fromOffset(x, y)
+    if not dragInput or not window.Visible then return end
+
+    if dragInput.UserInputType == Enum.UserInputType.MouseButton1 then
+        if input.UserInputType ~= Enum.UserInputType.MouseMovement then
+            return
+        end
+    elseif input ~= dragInput then
+        return
+    end
+
+    moveWindow(
+        windowStart + Vector2.new(input.Position.X, input.Position.Y) - dragStart
+    )
 end)
 
 connect(UserInputService.InputEnded, function(input)
-	if input == dragPointer then
-		dragPointer = nil
-	end
+    if dragInput and
+        (input == dragInput or
+        (input.UserInputType == Enum.UserInputType.MouseButton1
+        and dragInput.UserInputType == Enum.UserInputType.MouseButton1)) then
+        dragInput = nil
+    end
 end)
 
-selectTab("Credits")
+connect(UserInputService.WindowFocusReleased, function()
+    dragInput = nil
+end)
+
+connect(canvas:GetPropertyChangedSignal("AbsoluteSize"), resizeMenu)
+connect(tabList:GetPropertyChangedSignal("CanvasSize"), updateScrollHint)
+connect(tabList:GetPropertyChangedSignal("AbsoluteSize"), updateScrollHint)
+connect(tabList:GetPropertyChangedSignal("CanvasPosition"), updateScrollHint)
+
+updateTheme()
+resizeMenu()
+print("[RB Menu] Меню создано. Right Shift — скрыть/показать.")
